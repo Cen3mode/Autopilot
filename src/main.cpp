@@ -4,10 +4,20 @@
 #include <MPU9250.h>
 #include <Adafruit_BMP280.h>
 #include <SPI.h>
+#include <TelnetStream.h>
+#include <TinyGPS++.h>
 #include <Wire.h>
+
+#include "structs.h"
 
 const char * ssid = "TS";
 const char * passwd = "_MantatzpdP_";
+
+Adafruit_BMP280 bmp;
+MPU9250 mpu(Wire, 0x68);
+TinyGPSPlus gps;
+
+Telemetry telemetry;
 
 void wifiSetup() {
   WiFi.mode(WIFI_STA);
@@ -72,16 +82,70 @@ void otaTask(void * params) {
   }
 }
 
+void imuDataCollectionTask(void * params) {
+  for(;;) {
+
+    mpu.readSensor();
+
+    telemetry.imu.temp = (bmp.readTemperature()+mpu.getTemperature_C())/2.0f;
+    telemetry.imu.pres = bmp.readPressure();
+
+    telemetry.imu.ax = mpu.getAccelX_mss();
+    telemetry.imu.ay = mpu.getAccelY_mss();
+    telemetry.imu.az = mpu.getAccelZ_mss();
+
+    telemetry.imu.gx = mpu.getGyroX_rads();
+    telemetry.imu.gy = mpu.getGyroY_rads();
+    telemetry.imu.gz = mpu.getGyroZ_rads();
+
+    telemetry.imu.mx = mpu.getMagX_uT();
+    telemetry.imu.my = mpu.getMagY_uT();
+    telemetry.imu.mz = mpu.getMagZ_uT();
+
+    telemetry.imu.alt = bmp.readAltitude();
+
+    vTaskDelay(1);
+  }
+}
+
+void gpsDataCollectionTask(void * params) {
+  for(;;) {
+    while (Serial.available() > 0) {
+      if(gps.encode(Serial1.read())) {
+        telemetry.gps.lat = gps.location.lat();
+        telemetry.gps.lon = gps.location.lng();
+        telemetry.gps.speed = gps.speed.kmph();
+        telemetry.gps.alt = gps.altitude.meters();
+        telemetry.gps.course = gps.course.deg();
+      }
+    }
+    
+    vTaskDelay(1);
+  }
+}
+
 void setup() {
 
   Serial.begin(9600);
+  Serial1.begin(9600);
+  Wire.begin();
 
   wifiSetup();
   otaSetup();
 
+  TelnetStream.begin();
+
+  bmp.begin(0x77);
+  mpu.begin();
+
   xTaskCreate(otaTask, "OTA Task", 100000, NULL, 1, NULL);
+  xTaskCreate(imuDataCollectionTask, "Imu data collection task", 5000, NULL, 1, NULL);
+  xTaskCreate(gpsDataCollectionTask, "Gps data collection task", 5000, NULL, 1, NULL);
+
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  TelnetStream.println(telemetry.imu.ax);
+  TelnetStream.println(telemetry.gps.lat);
+  delay(1000);
 }
